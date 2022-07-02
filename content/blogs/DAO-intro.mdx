@@ -1,0 +1,117 @@
+---
+    author: 'Pieter Tolsma'
+    date: "9/2/2022"
+    title: "TreeDAO: A Practical Introduction to DAOs"
+    tags: "DAOs, Solidity, NextJS"
+    description: "TreeDAO was created as a reference for anyone who wants to learn how to make a DAO. It uses OpenZeppelin's audited ERC20, ERC115 and 
+Governance contracts behind the scenes in order to have a trustworthy governance structure. Users are able to mint a membership token and if they are 
+in the posession of SAP (the governance token), they can vote on - and create - proposals. You can check out the 
+full project [here](https://github.com/pietertolsma/TreeDAO)."
+    image: "https://images.unsplash.com/photo-1579546929518-9e396f3cc809?ixlib=rb-1.2.1&ixid=MnwxMjA3fDB8MHxleHBsb3JlLWZlZWR8MXx8fGVufDB8fHx8&w=1000&q=80"
+---
+_TL;DR: TreeDAO was created as a reference for anyone who wants to learn how to make a DAO. It uses OpenZeppelin's audited ERC20, ERC115 and 
+Governance contracts behind the scenes in order to have a trustworthy governance structure. Users are able to mint a membership token and if they are 
+in the posession of SAP (the governance token), they can vote on - and create - proposals. You can check out the 
+full project [here](https://github.com/pietertolsma/TreeDAO)._
+
+**Decentralized Autonomous Organizations (DAO)** started popping up the last few years as smart contracts became more and more available. DAOs are owned by a group of (anonymous) people that hold 
+governance tokens belonging to the organization. The more tokens someone has, the more voting power he/she has in deciding the direction of the organization.
+
+Because this type of organization is starting to catch on, I wanted to figure out how they really work.
+For me, the best way to understand something is to just build it. In this post, I will go over 
+the architecture and some of the things that I learned during this project.
+
+The learning objectives of this project are:
+- Configure and deploy custom smart contracts for the governance structure.
+- Write a custom front-end that:
+    - Allows users to become a member of TreeDAO
+    - Allows owners to vote on proposals
+    - Allows owners to create new proposals
+    - Allows owners to delegate their votes
+
+## TreeDAO Contracts
+This project uses [Hardhat](https://hardhat.org/) to compile and test the custom contracts and [Alchemy](https://www.alchemy.com/) to finally deploy it.
+
+**Using widely audited contracts** is a good idea if you want to avoid your fresh DAO becoming the victim of 
+[yet another contract hack](https://therecord.media/cryptocurrency-platform-wormhole-hacked-for-an-estimated-322-million/).
+For this project, I decided to reuse OpenZeppelin's ERC20, ERC115 and Governance contracts.
+They have [a neat contract configuration tool](https://wizard.openzeppelin.com/) to make it even easier.
+It is out of the scope of this post to go deep into what these standards do, but in short;
+- [ERC20](https://docs.openzeppelin.com/contracts/4.x/erc20) gives us a _fungible governance token_ called Sapling that is used to determine ownership.
+- [ERC1155](https://docs.openzeppelin.com/contracts/4.x/api/token/erc1155) gives us a _semi-fungible membership token_. Basically this means that many people can own a specific 'NFT'.
+ The advantage of this is that the transactions are cheaper than the most used NFT standard, ERC721.
+- The [Governance](https://docs.openzeppelin.com/contracts/4.x/api/governance) contracts are more complicated. It uses an ERC20 token (in our case Sapling)
+ to determine voting power. Wallets that contain more than 1% of the total supply are able to create a 
+ proposal, which in turn can contain at most 10 transactions. Once the proposal is accepted by the majority,
+  someone can execute the proposal, which will atomically execute all transactions within it.
+  To make it even more complicated, these transactions are put in a timelock. This will give people who
+  do not agree with the proposal time to 'ragequit' out of the DAO. These contracts also make use of checkpoints,
+  ensuring that people cannot 'double spend' their votes on a proposal by transfering Sapling tokens after voting.
+
+  _Example: 2 out of 3 members decide to work together and vote to withdraw the entire treasury to their own wallet.
+  The 3rd member is able to ragequit the DAO and take 1/3rd of the funds with him before the proposal is executed_
+
+**Testing smart contracts** is a great way to figure out how they function. For this project, I started off 
+[writing some tests](https://github.com/pietertolsma/TreeDAO/tree/master/contracts/test) to go through the
+entire process of deploying the contracts, creating a proposal, voting and finally executing it.
+Because of this, I was quickly able to figure out why I could not create or vote on any proposal; it turned
+out that you need to delegate your votes to your own address first in order to force a checkpoint.
+
+_Check out the full contract code [here](https://github.com/pietertolsma/TreeDAO/tree/master/contracts/contracts)_
+
+## TreeDAO Front-End
+For interacting with the contracts, this project uses [Next.JS](https://nextjs.org/), a React framework that is quickly
+gaining in popularity amongst web developers due to its neat hybrid static server rendering support.
+
+To speed up the development process, [chakra-ui](https://chakra-ui.com/) is used for quickly getting decent looking 
+components.
+
+[Ethers](https://docs.ethers.io/v5/) "aims to be a complete and compact 
+library for interacting with the Ethereum Blockchain and its ecosystem", and it does so 
+in a way that is really easy to use. The best thing about first testing the contracts is that the testing code 
+can be reused in the front-end part, since it needs to interact with the contract in the exact same way.
+
+**Events** are logged on-chain after most write operations on the contracts. Using events, it is possible to
+easily query things like, "find all created proposals", "find all token holders", etc. For example, I wrote
+the following code to calculate the current balance of token holders. Please note that this gets very 
+resource intensive when you start to get a lot of transactions, but for this demo it is sufficient.
+
+```javascript
+const abi = ["event Transfer(address indexed src, address indexed dst, uint val)"]
+const contract = new Contract(SAPLING_ADDRESS, abi, provider.getSigner(0))
+const eventFilter = await contract.filters.Transfer(null, null);
+const events = await contract.queryFilter(eventFilter)
+const owners = {}
+
+for (const evt of events) {
+    const src = evt.args[0]
+    const dst = evt.args[1]
+    const amount = parseFloat(ethers.utils.formatEther(evt.args[2]));
+
+    if (parseInt(src) != 0) {
+        if (src in owners) {
+            owners[src] -= amount;
+        } else {
+            reject("Sender of SAP had no balance");
+        }
+    }
+
+    if (parseInt(dst) != 0) {
+        if (dst in owners) {
+            owners[dst] += amount;
+        } else {
+            owners[dst] = amount;
+        }
+    }
+}
+```
+
+_Check out the full front-end project [here](https://github.com/pietertolsma/TreeDAO/tree/master/frontend)_
+
+## Final words
+Building and interacting with smart contracts has been a fun and rewarding practice so far.
+If you are interested in learning more about blockchain development, I can recommend that
+you start with any of the [buildspace.so](https://buildspace.so/) free courses. They are a great
+way to dip your toe in the water!
+
+If you want to learn more about Solidity, check out [Crypto Zombies](https://cryptozombies.io/)! 
